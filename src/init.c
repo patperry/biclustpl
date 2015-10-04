@@ -20,8 +20,13 @@
 
 #define CALLDEF(name, n)  {#name, (DL_FUNC) &name, n}
 
+SEXP biclust_dense(SEXP sx, SEXP srow_nclusters, SEXP srow_clusters,
+		   SEXP scol_nclusters, SEXP scol_clusters,
+		   SEXP sfamily, SEXP sepsilon, SEXP smaxit, SEXP strace);
+
+
 static const R_CallMethodDef CallEntries[] = {
-	CALLDEF(biclust_dense, 5),
+	CALLDEF(biclust_dense, 9),
 	{NULL, NULL, 0}
 };
 

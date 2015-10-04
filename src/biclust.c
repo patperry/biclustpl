@@ -14,8 +14,56 @@
 
 #include <Rdefines.h>
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
+
+
+
+static double entropy_gaussian(double size, double sum)
+{
+	double mean;
+
+	if (size <= 0)
+		return 0;
+
+	mean = sum / size;
+	return 0.5 * sum * mean;
+}
+
+
+static double entropy_binomial(double size, double sum)
+{
+	double csum, p, q;
+
+	if (size <= 0)
+		return 0;
+
+	if (sum <= 0 || sum >= size)
+		return 0;
+
+	csum = size - sum;
+	p = sum / size;
+	q = csum / size;
+
+	return sum * log(p) + csum * log(q);
+}
+
+
+static double entropy_poisson(double size, double sum)
+{
+	double mean;
+
+	if (size <= 0)
+		return 0;
+
+	if (sum <= 0)
+		return 0;
+
+	mean = sum / size;
+
+	return sum * (log(mean) - 1);
+}
 
 
 struct ploglik {
@@ -36,11 +84,13 @@ struct ploglik {
 	double *size;
 	double *row_size;
 	double *col_size;
+
+	double (*entropy)(double, double);
 };
 
 
 void ploglik_init(struct ploglik *pl, int m, int n, int K, int L,
-		  const double *x)
+		  const double *x, double (*entropy)(double, double))
 {
 	pl->x = x;
 	pl->m = m;
@@ -56,6 +106,7 @@ void ploglik_init(struct ploglik *pl, int m, int n, int K, int L,
 	pl->size = (double *)R_alloc(K * L, sizeof(double));
 	pl->row_size = (double *)R_alloc(L * m, sizeof(double));
 	pl->col_size = (double *)R_alloc(K * n, sizeof(double));
+	pl->entropy = entropy;
 }
 
 
@@ -80,7 +131,7 @@ double ploglik_eval(struct ploglik *pl)
 {
 	const int m = pl->m, n = pl->n, K = pl->K, L = pl->L;
 	const double *x = pl->x;
-	double obj_kl, n_kl, m_kl, s_kl, x_ij;
+	double obj_kl, n_kl, s_kl, x_ij;
 	int i, j, k, l;
 
 	// initialize sums and sizes to 0
@@ -109,20 +160,15 @@ double ploglik_eval(struct ploglik *pl)
 	}
 
 	// compute objective function
-	memset(pl->obj, 0, K * L * sizeof(double));
 	pl->obj_tot = 0;
 	for (l = 0; l < L; l++) {
 		for (k = 0; k < K; k++) {
 			n_kl = pl->size[k + l * K];
 			s_kl = pl->sum[k + l * K];
+			obj_kl = pl->entropy(n_kl, s_kl);
 
-			if (n_kl > 0) {
-				// 0.5 * n_kl (m_kl)^2
-				m_kl = s_kl / n_kl;
-				obj_kl = 0.5 * s_kl * m_kl;
-				pl->obj[k + l * K] = obj_kl;
-				pl->obj_tot += obj_kl;
-			}
+			pl->obj[k + l * K] = obj_kl;
+			pl->obj_tot += obj_kl;
 		}
 	}
 
@@ -143,8 +189,8 @@ double ploglik_add_row(struct ploglik *pl, enum update_type type,
 {
 	const int m = pl->m, n = pl->n, K = pl->K, L = pl->L;
 	const double *x = pl->x;
-	double m_kl_new, n_l, n_kl_new, obj_delta, obj_kl_old,
-	       obj_kl_new, s_l, s_kl_new, x_ij;
+	double n_l, n_kl_new, obj_delta, obj_kl_old, obj_kl_new,
+	       s_l, s_kl_new, x_ij;
 	int j, l;
 
 	// compute how much objective changes from moving i out of
@@ -156,13 +202,7 @@ double ploglik_add_row(struct ploglik *pl, enum update_type type,
 		s_l = pl->row_sum[l + i * L];
 		n_kl_new = pl->size[k + l * K] + w * n_l;
 		s_kl_new = pl->sum[k + l * K] + w * s_l;
-
-		if (n_kl_new > 0) {
-			m_kl_new = s_kl_new / n_kl_new;
-			obj_kl_new = 0.5 * s_kl_new * m_kl_new;
-		} else {
-			obj_kl_new = 0.0;
-		}
+		obj_kl_new = pl->entropy(n_kl_new, s_kl_new);
 
 		// update block sums
 		if (type == UPDATE) {
@@ -386,28 +426,40 @@ double plan_eval(struct plan *plan, struct ploglik *pl, int max_step)
 }
 
 
-SEXP biclust_dense(SEXP sx, SEXP srow_nclusters, SEXP srow_clusters,
-		   SEXP scol_nclusters, SEXP scol_clusters)
+SEXP biclust_dense(SEXP sx, SEXP srow_nclusters, SEXP srow_clusters0,
+		   SEXP scol_nclusters, SEXP scol_clusters0,
+		   SEXP sfamily, SEXP sepsilon, SEXP smaxit, SEXP strace)
 {
-	int iter, max_iter = 10000;
 	const double *x = REAL(sx);
 	const int m = nrows(sx);
 	const int n = ncols(sx);
 	const int K = asInteger(srow_nclusters);
 	const int L = asInteger(scol_nclusters);
-	const int *row_cl0 = INTEGER(srow_clusters);
-	const int *col_cl0 = INTEGER(scol_clusters);
-	int converged;
-	double tol = 1e-6;
-
+	const int *row_cl0 = INTEGER(srow_clusters0);
+	const int *col_cl0 = INTEGER(scol_clusters0);
+	const int maxit = asInteger(smaxit);
+	const double epsilon = asReal(sepsilon);
+	const int trace = asLogical(strace);
+	double (*entropy)(double, double);
 	struct ploglik pl0, pl1;
 	double val0, val1;
 	struct plan plan;
-	int best_step;
+	int best_step, converged, it;
+	SEXP ans, names, sizes, sums, row_clusters, col_clusters;
+
+	if (strcmp(CHAR(STRING_ELT(sfamily, 0)), "binomial") == 0) {
+		entropy = entropy_binomial;
+	} else if (strcmp(CHAR(STRING_ELT(sfamily, 0)), "gaussian") == 0) {
+		entropy = entropy_gaussian;
+	} else if (strcmp(CHAR(STRING_ELT(sfamily, 0)), "poisson") == 0) {
+		entropy = entropy_poisson;
+	} else {
+		error("invalid 'family' argument");
+	}
 
 	// allocate memory
-	ploglik_init(&pl0, m, n, K, L, x);
-	ploglik_init(&pl1, m, n, K, L, x);
+	ploglik_init(&pl0, m, n, K, L, x, entropy);
+	ploglik_init(&pl1, m, n, K, L, x, entropy);
 	plan_init(&plan, m, n);
 
 	// evaluate initial profile likelihood
@@ -417,11 +469,12 @@ SEXP biclust_dense(SEXP sx, SEXP srow_nclusters, SEXP srow_clusters,
 
 	converged = 0;
 
-	for (iter = 0; iter < max_iter; iter++) {
-		Rprintf("iter %d; value %lg\n", iter, val0);
+	for (it = 0; it < maxit; it++) {
+		if (trace) {
+			Rprintf("iter: %d; loglik: %lg\n", it, val0);
+		}
 
 		if (plan_compute(&plan, &pl0) == 0) {
-			Rprintf("no local moves\n");
 			// no possible local improvement
 			converged = 1;
 			break;
@@ -432,7 +485,7 @@ SEXP biclust_dense(SEXP sx, SEXP srow_nclusters, SEXP srow_clusters,
 
 		val1 = plan_eval(&plan, &pl0, best_step);
 
-		if (val1 - val0 <= tol) {
+		if (val1 - val0 <= epsilon) {
 			converged = 1;
 			break;
 		}
@@ -440,5 +493,39 @@ SEXP biclust_dense(SEXP sx, SEXP srow_nclusters, SEXP srow_clusters,
 		val0 = val1;
 	}
 
-	return NULL_USER_OBJECT;
+	if (!converged)
+		warning("algorithm did not converge");
+
+	sizes = PROTECT(allocMatrix(REALSXP, K, L));
+	memcpy(REAL(sizes), pl0.size, K * L * sizeof(double));
+
+	sums = PROTECT(allocMatrix(REALSXP, K, L));
+	memcpy(REAL(sums), pl0.sum, K * L * sizeof(double));
+
+	row_clusters = PROTECT(allocVector(INTSXP, m));
+	memcpy(INTEGER(row_clusters), pl0.row_cl, m * sizeof(int));
+
+	col_clusters = PROTECT(allocVector(INTSXP, n));
+	memcpy(INTEGER(col_clusters), pl0.col_cl, n * sizeof(int));
+
+	ans = PROTECT(allocVector(VECSXP, 7));
+	names = PROTECT(allocVector(STRSXP, 7));
+	SET_VECTOR_ELT(ans, 0, ScalarReal(pl0.obj_tot));
+	SET_STRING_ELT(names, 0, mkChar("loglik"));
+	SET_VECTOR_ELT(ans, 1, row_clusters);
+	SET_STRING_ELT(names, 1, mkChar("row_clusters"));
+	SET_VECTOR_ELT(ans, 2, col_clusters);
+	SET_STRING_ELT(names, 2, mkChar("col_clusters"));
+	SET_VECTOR_ELT(ans, 3, sizes);
+	SET_STRING_ELT(names, 3, mkChar("sizes"));
+	SET_VECTOR_ELT(ans, 4, sums);
+	SET_STRING_ELT(names, 4, mkChar("sums"));
+	SET_VECTOR_ELT(ans, 5, ScalarInteger(it));
+	SET_STRING_ELT(names, 5, mkChar("iter"));
+	SET_VECTOR_ELT(ans, 6, ScalarLogical(converged));
+	SET_STRING_ELT(names, 6, mkChar("conv"));
+	SET_NAMES(ans, names);
+
+	UNPROTECT(6);
+	return ans;
 }

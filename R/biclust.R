@@ -42,7 +42,9 @@ validate_clusters <- function(n, clusters)
 }
 
 
-biclust_dense <- function(x, row_clusters, col_clusters)
+biclust_dense <- function(x, row_clusters, col_clusters,
+                          family=c("gaussian", "poisson", "binomial"),
+                          epsilon=1e-6, maxit=10000L, trace=TRUE)
 {
     x <- as.matrix(x)
     storage.mode(x) <- "double"
@@ -50,6 +52,19 @@ biclust_dense <- function(x, row_clusters, col_clusters)
     row <- validate_clusters(nrow(x), row_clusters)
     col <- validate_clusters(ncol(x), col_clusters)
 
-    .Call(C_biclust_dense, x, row$nclusters, row$clusters - 1L,
-          col$nclusters, col$clusters - 1L)
+    family <- match.arg(family)
+    storage.mode(epsilon) <- "double"
+    storage.mode(maxit) <- "integer"
+
+    ans <- .Call(C_biclust_dense, x, row$nclusters, row$clusters - 1L,
+                 col$nclusters, col$clusters - 1L, family, epsilon, maxit,
+                 trace)
+    ans$row_clusters <- ans$row_clusters + 1L
+    ans$col_clusters <- ans$col_clusters + 1L
+    means <- matrix(0, row$nclusters, col$nclusters)
+
+    nonempty <- ans$sizes > 0
+    means[nonempty] <- ans$sums[nonempty] / ans$sizes[nonempty]
+    ans$means <- means
+    ans
 }

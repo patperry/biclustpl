@@ -15,7 +15,8 @@
 #ifndef BICLUST_H
 #define BICLUST_H
 
-SEXP biclust_dense(SEXP x, SEXP row_nclusters, SEXP row_clusters,
-		   SEXP col_nclusters, SEXP col_clusters);
+SEXP biclust_dense(SEXP sx, SEXP srow_nclusters, SEXP srow_clusters,
+		   SEXP scol_nclusters, SEXP scol_clusters,
+		   SEXP sfamily, SEXP sepsilon, SEXP smaxit, SEXP strace);
 
 #endif // BICLUST_H
