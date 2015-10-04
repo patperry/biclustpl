@@ -1,0 +1,3 @@
+useDynLib(biclustpl, .registration = TRUE, .fixes = "C_")
+
+exportPattern("^[^\\.]")
