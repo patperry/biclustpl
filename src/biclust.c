@@ -19,7 +19,6 @@
 #include <string.h>
 
 
-
 static double entropy_gaussian(double size, double sum)
 {
 	double mean;
@@ -193,8 +192,7 @@ double ploglik_add_row(struct ploglik *pl, enum update_type type,
 	       s_l, s_kl_new, x_ij;
 	int j, l;
 
-	// compute how much objective changes from moving i out of
-	// class kold
+	// compute how much objective changes from moving i out of class k
 	obj_delta = 0.0;
 	for (l = 0; l < L; l++) {
 		obj_kl_old = pl->obj[k + l * K];
@@ -233,6 +231,54 @@ double ploglik_add_row(struct ploglik *pl, enum update_type type,
 	}
 
 	//Rprintf("[obj_tot_new = %lg]", pl->obj_tot);
+
+	return obj_delta;
+}
+
+
+double ploglik_add_col(struct ploglik *pl, enum update_type type,
+		       int j, int l, double w)
+{
+	const int m = pl->m, K = pl->K, L = pl->L;
+	const double *x = pl->x;
+	double n_k, n_kl_new, obj_delta, obj_kl_old, obj_kl_new,
+	       s_k, s_kl_new, x_ij;
+	int i, k;
+
+	// compute how much objective changes from moving i out of class l
+	obj_delta = 0.0;
+	for (k = 0; k < K; k++) {
+		obj_kl_old = pl->obj[k + l * K];
+		n_k = pl->col_size[k + j * K];
+		s_k = pl->col_sum[k + j * K];
+		n_kl_new = pl->size[k + l * K] + w * n_k;
+		s_kl_new = pl->sum[k + l * K] + w * s_k;
+		obj_kl_new = pl->entropy(n_kl_new, s_kl_new);
+
+		// update block sums
+		if (type == UPDATE) {
+			pl->size[k + l * K] = n_kl_new;
+			pl->sum[k + l * K] = s_kl_new;
+			pl->obj[k + l * K] = obj_kl_new;
+		}
+
+		obj_delta += obj_kl_new - obj_kl_old;
+
+	}
+
+	// update row sums and objective function
+	if (type == UPDATE) {
+		for (i = 0; i < m; i++) {
+			x_ij = x[i + j * m];
+
+			if (R_finite(x_ij)) {
+				pl->row_sum[l + i * L] += w * x_ij;
+				pl->row_size[l + i * L] += w;
+			}
+		}
+
+		pl->obj_tot += obj_delta;
+	}
 
 	return obj_delta;
 }
@@ -279,6 +325,42 @@ double ploglik_improve_row(const struct ploglik *pl, int i, int *kbest)
 }
 
 
+// compute best improvement gotten from moving column j; return best
+// new cluster in lbest
+double ploglik_improve_col(const struct ploglik *pl, int j, int *lbest)
+{
+	struct ploglik *pl1 = (struct ploglik *)pl; // discard const
+	const int L = pl->L, lold = pl->col_cl[j];
+	double obj, obj_best, obj_out, obj_in;
+	int l;
+
+	*lbest = lold;
+	obj_best = 0.0;
+
+	if (L == 1)
+		return obj_best;
+
+	// compute how much objective changes from moving j out of class lold
+	obj_out = ploglik_add_col(pl1, NO_UPDATE, j, lold, -1);
+
+	// compute how much objective changes from moving j into class l
+	for (l = 0; l < L; l++) {
+		if (l == lold)
+			continue;
+
+		obj_in = ploglik_add_col(pl1, NO_UPDATE, j, l, +1);
+		obj = obj_out + obj_in;
+
+		if (obj > obj_best) {
+			obj_best = obj;
+			*lbest = l;
+		}
+	}
+
+	return obj_best;
+}
+
+
 enum move_type {
 	ROW_MOVE,
 	COL_MOVE
@@ -295,7 +377,6 @@ struct move {
 
 struct plan {
 	struct move *move;
-	double *path;
 	int size;
 };
 
@@ -306,7 +387,6 @@ void plan_init(struct plan *plan, int m, int n)
 
 	plan->size = size;
 	plan->move = (struct move *)R_alloc(size, sizeof(struct move));
-	plan->path = (double *)R_alloc(size, sizeof(double));
 }
 
 
@@ -343,8 +423,7 @@ double plan_compute(struct plan *plan, const struct ploglik *pl)
 	}
 
 	for (j = 0; j < n; j++) {
-		obj = 0.0;
-		cl_best = pl->col_cl[j];
+		obj = ploglik_improve_col(pl, j, &cl_best);
 		plan->move[m + j].type = COL_MOVE;
 		plan->move[m + j].index = j;
 		plan->move[m + j].cluster = cl_best;
@@ -384,17 +463,17 @@ int plan_eval_path(struct plan *plan, struct ploglik *pl)
 			break;
 		case COL_MOVE:
 			cl_old = pl->col_cl[i];
+			if (cl_new != cl_old) {
+				ploglik_add_col(pl, UPDATE, i, cl_old, -1);
+				ploglik_add_col(pl, UPDATE, i, cl_new, +1);
+			}
 			break;
 		}
 		if (pl->obj_tot > obj_best) {
 			obj_best = pl->obj_tot;
 			step_best = step;
 		}
-
-		//Rprintf("step %d (%lg)\n", step, pl->obj_tot);
 	}
-
-	//Rprintf("step_best: %d (%lg)\n", step_best, obj_best);
 
 	return step_best;
 }
@@ -444,7 +523,7 @@ SEXP biclust_dense(SEXP sx, SEXP srow_nclusters, SEXP srow_clusters0,
 	struct ploglik pl0, pl1;
 	double val0, val1;
 	struct plan plan;
-	int best_step, converged, it;
+	int best_step, converged, it, nmove;
 	SEXP ans, names, sizes, sums, row_clusters, col_clusters;
 
 	if (strcmp(CHAR(STRING_ELT(sfamily, 0)), "binomial") == 0) {
@@ -468,6 +547,7 @@ SEXP biclust_dense(SEXP sx, SEXP srow_nclusters, SEXP srow_clusters0,
 	val0 = ploglik_eval(&pl0);
 
 	converged = 0;
+	nmove = 0;
 
 	for (it = 0; it < maxit; it++) {
 		if (trace) {
@@ -484,6 +564,7 @@ SEXP biclust_dense(SEXP sx, SEXP srow_nclusters, SEXP srow_clusters0,
 		best_step = plan_eval_path(&plan, &pl1);
 
 		val1 = plan_eval(&plan, &pl0, best_step);
+		nmove += best_step + 1;
 
 		if (val1 - val0 <= epsilon) {
 			converged = 1;
@@ -508,8 +589,8 @@ SEXP biclust_dense(SEXP sx, SEXP srow_nclusters, SEXP srow_clusters0,
 	col_clusters = PROTECT(allocVector(INTSXP, n));
 	memcpy(INTEGER(col_clusters), pl0.col_cl, n * sizeof(int));
 
-	ans = PROTECT(allocVector(VECSXP, 7));
-	names = PROTECT(allocVector(STRSXP, 7));
+	ans = PROTECT(allocVector(VECSXP, 8));
+	names = PROTECT(allocVector(STRSXP, 8));
 	SET_VECTOR_ELT(ans, 0, ScalarReal(pl0.obj_tot));
 	SET_STRING_ELT(names, 0, mkChar("loglik"));
 	SET_VECTOR_ELT(ans, 1, row_clusters);
@@ -521,9 +602,11 @@ SEXP biclust_dense(SEXP sx, SEXP srow_nclusters, SEXP srow_clusters0,
 	SET_VECTOR_ELT(ans, 4, sums);
 	SET_STRING_ELT(names, 4, mkChar("sums"));
 	SET_VECTOR_ELT(ans, 5, ScalarInteger(it));
-	SET_STRING_ELT(names, 5, mkChar("iter"));
-	SET_VECTOR_ELT(ans, 6, ScalarLogical(converged));
-	SET_STRING_ELT(names, 6, mkChar("conv"));
+	SET_STRING_ELT(names, 5, mkChar("niter"));
+	SET_VECTOR_ELT(ans, 6, ScalarInteger(nmove));
+	SET_STRING_ELT(names, 6, mkChar("nmove"));
+	SET_VECTOR_ELT(ans, 7, ScalarLogical(converged));
+	SET_STRING_ELT(names, 7, mkChar("conv"));
 	SET_NAMES(ans, names);
 
 	UNPROTECT(6);
