@@ -517,8 +517,9 @@ SEXP biclust_dense(SEXP sx, SEXP srow_nclusters, SEXP srow_clusters0,
 	const int L = asInteger(scol_nclusters);
 	const int *row_cl0 = INTEGER(srow_clusters0);
 	const int *col_cl0 = INTEGER(scol_clusters0);
-	const int maxit = asInteger(smaxit);
+	const char *family = CHAR(STRING_ELT(sfamily, 0));
 	const double epsilon = asReal(sepsilon);
+	const int maxit = asInteger(smaxit);
 	const int trace = asLogical(strace);
 	double (*entropy)(double, double);
 	struct ploglik pl0, pl1;
@@ -528,11 +529,11 @@ SEXP biclust_dense(SEXP sx, SEXP srow_nclusters, SEXP srow_clusters0,
 	SEXP ans, names, sizes, sums, row_sizes, row_sums, row_clusters,
 	     col_sizes, col_sums, col_clusters;
 
-	if (strcmp(CHAR(STRING_ELT(sfamily, 0)), "binomial") == 0) {
+	if (strcmp(family, "binomial") == 0) {
 		entropy = entropy_binomial;
-	} else if (strcmp(CHAR(STRING_ELT(sfamily, 0)), "gaussian") == 0) {
+	} else if (strcmp(family, "gaussian") == 0) {
 		entropy = entropy_gaussian;
-	} else if (strcmp(CHAR(STRING_ELT(sfamily, 0)), "poisson") == 0) {
+	} else if (strcmp(family, "poisson") == 0) {
 		entropy = entropy_poisson;
 	} else {
 		error("invalid 'family' argument");
