@@ -44,7 +44,6 @@ static double entropy_binomial(double size, double sum)
 	csum = size - sum;
 	p = sum / size;
 	q = csum / size;
-
 	return sum * log(p) + csum * log(q);
 }
 
@@ -60,7 +59,6 @@ static double entropy_poisson(double size, double sum)
 		return 0;
 
 	mean = sum / size;
-
 	return sum * (log(mean) - 1);
 }
 
@@ -290,18 +288,18 @@ double ploglik_improve_row(const struct ploglik *pl, int i, int *kbest)
 {
 	struct ploglik *pl1 = (struct ploglik *)pl; // discard const
 	const int K = pl->K, kold = pl->row_cl[i];
-	double obj, obj_best, obj_out, obj_in;
+	double delta, delta_best, delta_out, delta_in;
 	int k;
 
 	*kbest = kold;
-	obj_best = 0.0;
+	delta_best = 0.0;
 
 	if (K == 1)
-		return obj_best;
+		return delta_best;
 
 	// compute how much objective changes from moving i out of
 	// class kold
-	obj_out = ploglik_add_row(pl1, NO_UPDATE, i, kold, -1);
+	delta_out = ploglik_add_row(pl1, NO_UPDATE, i, kold, -1);
 
 	// compute how much objective changes from moving i
 	// into class k
@@ -309,19 +307,19 @@ double ploglik_improve_row(const struct ploglik *pl, int i, int *kbest)
 		if (k == kold)
 			continue;
 
-		obj_in = ploglik_add_row(pl1, NO_UPDATE, i, k, +1);
-		obj = obj_out + obj_in;
+		delta_in = ploglik_add_row(pl1, NO_UPDATE, i, k, +1);
+		delta = delta_out + delta_in;
 
-		if (obj > obj_best) {
-			obj_best = obj;
+		if (delta > delta_best) {
+			delta_best = delta;
 			*kbest = k;
 		}
 	}
 
 	//Rprintf("best for row %d is cl %d -> %d (%lg)\n", i,
-	//	kold, *kbest, obj_best);
+	//	kold, *kbest, delta_best);
 
-	return obj_best;
+	return delta_best;
 }
 
 
@@ -331,33 +329,36 @@ double ploglik_improve_col(const struct ploglik *pl, int j, int *lbest)
 {
 	struct ploglik *pl1 = (struct ploglik *)pl; // discard const
 	const int L = pl->L, lold = pl->col_cl[j];
-	double obj, obj_best, obj_out, obj_in;
+	double delta, delta_best, delta_out, delta_in;
 	int l;
 
 	*lbest = lold;
-	obj_best = 0.0;
+	delta_best = 0.0;
 
 	if (L == 1)
-		return obj_best;
+		return delta_best;
 
 	// compute how much objective changes from moving j out of class lold
-	obj_out = ploglik_add_col(pl1, NO_UPDATE, j, lold, -1);
+	delta_out = ploglik_add_col(pl1, NO_UPDATE, j, lold, -1);
 
 	// compute how much objective changes from moving j into class l
 	for (l = 0; l < L; l++) {
 		if (l == lold)
 			continue;
 
-		obj_in = ploglik_add_col(pl1, NO_UPDATE, j, l, +1);
-		obj = obj_out + obj_in;
+		delta_in = ploglik_add_col(pl1, NO_UPDATE, j, l, +1);
+		delta = delta_out + delta_in;
 
-		if (obj > obj_best) {
-			obj_best = obj;
+		if (delta > delta_best) {
+			delta_best = delta;
 			*lbest = l;
 		}
 	}
 
-	return obj_best;
+	//Rprintf("best for col %d is cl %d -> %d (%lg)\n", j,
+	//	lold, *lbest, delta_best);
+
+	return delta_best;
 }
 
 
@@ -406,38 +407,38 @@ static int move_compare(const void *pa, const void *pb)
 
 double plan_compute(struct plan *plan, const struct ploglik *pl)
 {
-	double obj, obj_best;
+	double delta, delta_best;
 	int cl_best, i, j, m = pl->m, n = pl->n;
 
-	obj_best = 0;
+	delta_best = 0;
 
 	for (i = 0; i < m; i++) {
-		obj = ploglik_improve_row(pl, i, &cl_best);
+		delta = ploglik_improve_row(pl, i, &cl_best);
 		plan->move[i].type = ROW_MOVE;
 		plan->move[i].index = i;
 		plan->move[i].cluster = cl_best;
-		plan->move[i].obj_delta = obj;
+		plan->move[i].obj_delta = delta;
 
-		if (obj > obj_best)
-			obj_best = obj;
+		if (delta > delta_best)
+			delta_best = delta;
 	}
 
 	for (j = 0; j < n; j++) {
-		obj = ploglik_improve_col(pl, j, &cl_best);
+		delta = ploglik_improve_col(pl, j, &cl_best);
 		plan->move[m + j].type = COL_MOVE;
 		plan->move[m + j].index = j;
 		plan->move[m + j].cluster = cl_best;
-		plan->move[m + j].obj_delta = obj;
+		plan->move[m + j].obj_delta = delta;
 
-		if (obj > obj_best)
-			obj_best = obj;
+		if (delta > delta_best)
+			delta_best = delta;
 	}
 
-	if (obj_best > 0) {
+	if (delta_best > 0) {
 		qsort(plan->move, m + n, sizeof(*plan->move), move_compare);
 	}
 
-	return obj_best;
+	return delta_best;
 }
 
 
@@ -446,7 +447,7 @@ int plan_eval_path(struct plan *plan, struct ploglik *pl)
 	int step, size = plan->size;
 	const struct move *move;
 	int i, cl_new, cl_old;
-	double obj_best = 0.0;
+	double obj_best = pl->obj_tot;
 	int step_best = -1;
 
 	for (step = 0; step < size; step++) {
@@ -488,8 +489,8 @@ double plan_eval(struct plan *plan, struct ploglik *pl, int max_step)
 
 	for (step = 0; step <= max_step; step++) {
 		move = &plan->move[step];
-		cl = move->cluster;
 		i = move->index;
+		cl = move->cluster;
 		switch (move->type) {
 		case ROW_MOVE:
 			pl->row_cl[i] = cl;
