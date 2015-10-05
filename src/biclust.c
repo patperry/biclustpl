@@ -98,11 +98,11 @@ void ploglik_init(struct ploglik *pl, int m, int n, int K, int L,
 	pl->col_cl = (int *)R_alloc(n, sizeof(int));
 	pl->sum = (double *)R_alloc(K * L, sizeof(double));
 	pl->obj = (double *)R_alloc(K * L, sizeof(double));
-	pl->row_sum = (double *)R_alloc(L * m, sizeof(double));
-	pl->col_sum = (double *)R_alloc(K * n, sizeof(double));
+	pl->row_sum = (double *)R_alloc(m * L, sizeof(double));
+	pl->col_sum = (double *)R_alloc(n * K, sizeof(double));
 	pl->size = (double *)R_alloc(K * L, sizeof(double));
-	pl->row_size = (double *)R_alloc(L * m, sizeof(double));
-	pl->col_size = (double *)R_alloc(K * n, sizeof(double));
+	pl->row_size = (double *)R_alloc(m * L, sizeof(double));
+	pl->col_size = (double *)R_alloc(n * K, sizeof(double));
 	pl->entropy = entropy;
 }
 
@@ -115,11 +115,11 @@ void ploglik_assign(struct ploglik *pl, const struct ploglik *src)
 	memcpy(pl->col_cl, src->col_cl, n * sizeof(int));
 	memcpy(pl->sum, src->sum, K * L * sizeof(double));
 	memcpy(pl->obj, src->obj, K * L * sizeof(double));
-	memcpy(pl->row_sum, src->row_sum, L * m * sizeof(double));
-	memcpy(pl->col_sum, src->col_sum, K * n * sizeof(double));
+	memcpy(pl->row_sum, src->row_sum, m * L * sizeof(double));
+	memcpy(pl->col_sum, src->col_sum, n * K * sizeof(double));
 	memcpy(pl->size, src->size, K * L * sizeof(double));
-	memcpy(pl->row_size, src->row_size, L * m * sizeof(double));
-	memcpy(pl->col_size, src->col_size, K * n * sizeof(double));
+	memcpy(pl->row_size, src->row_size, m * L * sizeof(double));
+	memcpy(pl->col_size, src->col_size, n * K * sizeof(double));
 	pl->obj_tot = src->obj_tot;
 }
 
@@ -134,10 +134,10 @@ double ploglik_eval(struct ploglik *pl)
 	// initialize sums and sizes to 0
 	memset(pl->sum, 0, K * L * sizeof(double));
 	memset(pl->size, 0, K * L * sizeof(double));
-	memset(pl->row_sum, 0, L * m * sizeof(double));
-	memset(pl->row_size, 0, L * m * sizeof(double));
-	memset(pl->col_sum, 0, K * n * sizeof(double));
-	memset(pl->col_size, 0, K * n * sizeof(double));
+	memset(pl->row_sum, 0, m * L * sizeof(double));
+	memset(pl->row_size, 0, m * L * sizeof(double));
+	memset(pl->col_sum, 0, n * K * sizeof(double));
+	memset(pl->col_size, 0, n * K * sizeof(double));
 
 	// compute block sums and sizes
 	for (j = 0; j < n; j++) {
@@ -148,10 +148,10 @@ double ploglik_eval(struct ploglik *pl)
 				k = pl->row_cl[i];
 				pl->sum[k + l * K] += x_ij;
 				pl->size[k + l * K] += 1;
-				pl->row_sum[l + i * L] += x_ij;
-				pl->row_size[l + i * L] += 1;
-				pl->col_sum[k + j * K] += x_ij;
-				pl->col_size[k + j * K] += 1;
+				pl->row_sum[i + l * m] += x_ij;
+				pl->row_size[i + l * m] += 1;
+				pl->col_sum[j + k * n] += x_ij;
+				pl->col_size[j + k * n] += 1;
 			}
 		}
 	}
@@ -194,8 +194,8 @@ double ploglik_add_row(struct ploglik *pl, enum update_type type,
 	obj_delta = 0.0;
 	for (l = 0; l < L; l++) {
 		obj_kl_old = pl->obj[k + l * K];
-		n_l = pl->row_size[l + i * L];
-		s_l = pl->row_sum[l + i * L];
+		n_l = pl->row_size[i + l * m];
+		s_l = pl->row_sum[i + l * m];
 		n_kl_new = pl->size[k + l * K] + w * n_l;
 		s_kl_new = pl->sum[k + l * K] + w * s_l;
 		obj_kl_new = pl->entropy(n_kl_new, s_kl_new);
@@ -220,8 +220,8 @@ double ploglik_add_row(struct ploglik *pl, enum update_type type,
 			x_ij = x[i + j * m];
 
 			if (R_finite(x_ij)) {
-				pl->col_sum[k + j * K] += w * x_ij;
-				pl->col_size[k + j * K] += w;
+				pl->col_sum[j + k * n] += w * x_ij;
+				pl->col_size[j + k * n] += w;
 			}
 		}
 
@@ -237,7 +237,7 @@ double ploglik_add_row(struct ploglik *pl, enum update_type type,
 double ploglik_add_col(struct ploglik *pl, enum update_type type,
 		       int j, int l, double w)
 {
-	const int m = pl->m, K = pl->K, L = pl->L;
+	const int m = pl->m, n = pl->n, K = pl->K;
 	const double *x = pl->x;
 	double n_k, n_kl_new, obj_delta, obj_kl_old, obj_kl_new,
 	       s_k, s_kl_new, x_ij;
@@ -247,8 +247,8 @@ double ploglik_add_col(struct ploglik *pl, enum update_type type,
 	obj_delta = 0.0;
 	for (k = 0; k < K; k++) {
 		obj_kl_old = pl->obj[k + l * K];
-		n_k = pl->col_size[k + j * K];
-		s_k = pl->col_sum[k + j * K];
+		n_k = pl->col_size[j + k * n];
+		s_k = pl->col_sum[j + k * n];
 		n_kl_new = pl->size[k + l * K] + w * n_k;
 		s_kl_new = pl->sum[k + l * K] + w * s_k;
 		obj_kl_new = pl->entropy(n_kl_new, s_kl_new);
@@ -270,8 +270,8 @@ double ploglik_add_col(struct ploglik *pl, enum update_type type,
 			x_ij = x[i + j * m];
 
 			if (R_finite(x_ij)) {
-				pl->row_sum[l + i * L] += w * x_ij;
-				pl->row_size[l + i * L] += w;
+				pl->row_sum[i + l * m] += w * x_ij;
+				pl->row_size[i + l * m] += w;
 			}
 		}
 
@@ -525,7 +525,8 @@ SEXP biclust_dense(SEXP sx, SEXP srow_nclusters, SEXP srow_clusters0,
 	double val0, val1;
 	struct plan plan;
 	int best_step, converged, it, nmove;
-	SEXP ans, names, sizes, sums, row_clusters, col_clusters;
+	SEXP ans, names, sizes, sums, row_sizes, row_sums, row_clusters,
+	     col_sizes, col_sums, col_clusters;
 
 	if (strcmp(CHAR(STRING_ELT(sfamily, 0)), "binomial") == 0) {
 		entropy = entropy_binomial;
@@ -584,14 +585,26 @@ SEXP biclust_dense(SEXP sx, SEXP srow_nclusters, SEXP srow_clusters0,
 	sums = PROTECT(allocMatrix(REALSXP, K, L));
 	memcpy(REAL(sums), pl0.sum, K * L * sizeof(double));
 
+	row_sizes = PROTECT(allocMatrix(REALSXP, m, L));
+	memcpy(REAL(row_sizes), pl0.row_size, m * L * sizeof(double));
+
+	row_sums = PROTECT(allocMatrix(REALSXP, m, L));
+	memcpy(REAL(row_sums), pl0.row_sum, m * L * sizeof(double));
+
 	row_clusters = PROTECT(allocVector(INTSXP, m));
 	memcpy(INTEGER(row_clusters), pl0.row_cl, m * sizeof(int));
+
+	col_sizes = PROTECT(allocMatrix(REALSXP, n, K));
+	memcpy(REAL(col_sizes), pl0.col_size, n * K * sizeof(double));
+
+	col_sums = PROTECT(allocMatrix(REALSXP, n, K));
+	memcpy(REAL(col_sums), pl0.col_sum, n * K * sizeof(double));
 
 	col_clusters = PROTECT(allocVector(INTSXP, n));
 	memcpy(INTEGER(col_clusters), pl0.col_cl, n * sizeof(int));
 
-	ans = PROTECT(allocVector(VECSXP, 8));
-	names = PROTECT(allocVector(STRSXP, 8));
+	ans = PROTECT(allocVector(VECSXP, 12));
+	names = PROTECT(allocVector(STRSXP, 12));
 	SET_VECTOR_ELT(ans, 0, ScalarReal(pl0.obj_tot));
 	SET_STRING_ELT(names, 0, mkChar("loglik"));
 	SET_VECTOR_ELT(ans, 1, row_clusters);
@@ -602,14 +615,22 @@ SEXP biclust_dense(SEXP sx, SEXP srow_nclusters, SEXP srow_clusters0,
 	SET_STRING_ELT(names, 3, mkChar("sizes"));
 	SET_VECTOR_ELT(ans, 4, sums);
 	SET_STRING_ELT(names, 4, mkChar("sums"));
-	SET_VECTOR_ELT(ans, 5, ScalarInteger(it));
-	SET_STRING_ELT(names, 5, mkChar("niter"));
-	SET_VECTOR_ELT(ans, 6, ScalarInteger(nmove));
-	SET_STRING_ELT(names, 6, mkChar("nmove"));
-	SET_VECTOR_ELT(ans, 7, ScalarLogical(converged));
-	SET_STRING_ELT(names, 7, mkChar("conv"));
+	SET_VECTOR_ELT(ans, 5, row_sizes);
+	SET_STRING_ELT(names, 5, mkChar("row_sizes"));
+	SET_VECTOR_ELT(ans, 6, row_sums);
+	SET_STRING_ELT(names, 6, mkChar("row_sums"));
+	SET_VECTOR_ELT(ans, 7, col_sizes);
+	SET_STRING_ELT(names, 7, mkChar("col_sizes"));
+	SET_VECTOR_ELT(ans, 8, col_sums);
+	SET_STRING_ELT(names, 8, mkChar("col_sums"));
+	SET_VECTOR_ELT(ans, 9, ScalarInteger(it));
+	SET_STRING_ELT(names, 9, mkChar("niter"));
+	SET_VECTOR_ELT(ans, 10, ScalarInteger(nmove));
+	SET_STRING_ELT(names, 10, mkChar("nmove"));
+	SET_VECTOR_ELT(ans, 11, ScalarLogical(converged));
+	SET_STRING_ELT(names, 11, mkChar("conv"));
 	SET_NAMES(ans, names);
 
-	UNPROTECT(6);
+	UNPROTECT(10);
 	return ans;
 }

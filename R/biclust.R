@@ -87,10 +87,15 @@ biclust_dense <- function(x, row_clusters, col_clusters,
 
     ans$row_clusters <- ans$row_clusters + 1L
     ans$col_clusters <- ans$col_clusters + 1L
-    means <- matrix(0, row$nclusters, col$nclusters)
 
-    nonempty <- ans$sizes > 0
-    means[nonempty] <- ans$sums[nonempty] / ans$sizes[nonempty]
-    ans$means <- means
+    ans$means <- ans$sums / ans$sizes
+    ans$means[ans$sizes == 0] <- NA
+
+    ans$row_means <- ans$row_sums / ans$row_sizes
+    ans$row_means[ans$row_sizes == 0] <- NA
+
+    ans$col_means <- ans$col_sums / ans$col_sizes
+    ans$col_means[ans$col_sizes == 0] <- NA
+
     ans
 }
