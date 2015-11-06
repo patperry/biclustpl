@@ -44,13 +44,15 @@ validate_clusters <- function(n, clusters)
 
 biclust_dense <- function(x, row_clusters, col_clusters,
                           family = c("gaussian", "poisson", "binomial"),
-                          nstart = 1,
+                          nstart = 1, loglik_seq = FALSE,
                           epsilon = 1e-6, maxit = 10000L, trace = FALSE)
 {
     x <- as.matrix(x)
     storage.mode(x) <- "double"
     m <- nrow(x)
     n <- ncol(x)
+
+    ret_loglik_seq <- loglik_seq
 
     row <- validate_clusters(nrow(x), row_clusters)
     col <- validate_clusters(ncol(x), col_clusters)
@@ -71,9 +73,12 @@ biclust_dense <- function(x, row_clusters, col_clusters,
 
     best <- NULL
 
+    loglik_seq = rep(NA, nstart)
+
     for (start in seq_len(nstart)) {
         ans <- .Call(C_biclust_dense, x, K, row_cl0, L, col_cl0,
                      family, epsilon, maxit, trace)
+        loglik_seq[start] <- ans$loglik
         if (start == 1 || ans$loglik > best$loglik) {
             best <- ans
         }
@@ -96,6 +101,9 @@ biclust_dense <- function(x, row_clusters, col_clusters,
 
     ans$col_means <- ans$col_sums / ans$col_sizes
     ans$col_means[ans$col_sizes == 0] <- NA
+
+    if (ret_loglik_seq)
+        ans$loglik_seq <- loglik_seq
 
     ans
 }
